@@ -1,5 +1,35 @@
 [
     {
+        "versionName": "v5.37.0",
+        "changelog": [
+            "【UI 界面】",
+            "优化 字体显示字重，文字层级更清晰",
+            "优化 各界面交互逻辑，操作更加流畅",
+            "优化 RecyclerView 架构，提升整体性能",
+            "",
+            "“关于页面” 背景渐变层为液态流体",
+            "支持设置个性化背景图，详细说明见应用内",
+            "",
+            "【配置覆写】",
+            "支持 “总模式” 策略组引用全部节点",
+            "支持 订阅更新、健康检查等配置",
+            "支持 订阅管理 “启动服务时是否自动更新”",
+            "",
+            "【代理组件】",
+            "支持 设置超时时间及胶囊气泡颜色阈值",
+            "",
+            "【服务检查】",
+            "支持 更多检测项",
+            "",
+            "【DEBUG】",
+            "修复已知问题，提升稳定性",
+            "经验证此版本已修复诸多问题，建议更新"
+        ],
+        "fileSize": 8749979,
+        "sha256": "965dec76e0b044a27a4aeb44b4360ec44333a0fc05228b7e5219b2802aca4047",
+        "downloadUrl": "https://raw.githubusercontent.com/GitMetaio/Surfing/main/app/version/com.surfing.tile/SurfingTile_{VER}_release.apk"
+    },
+    {
         "versionName": "v5.35.5",
         "changelog": [
             "修复已知问题，提升稳定性"
