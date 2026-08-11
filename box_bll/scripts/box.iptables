@@ -10,6 +10,9 @@ scripts_dir=$(dirname "${scripts}")
 
 . "${scripts_dir}/box.config"
 
+mkdir -p "${run_path}"
+iptables_lock_dir="${run_path}/box.iptables.lock"
+
 mark_id="16777216/16777216"
 table_id="2024"
 tun_table_index=${table_id:-2024}
@@ -32,6 +35,31 @@ log() {
             [ -t 1 ] && printf "\033[1;30m%s [%s]: %s\033[0m\n" "${now}" "$1" "$2" || echo "${now} [$1]: $2"
             ;;
     esac
+}
+
+acquire_iptables_lock() {
+  if mkdir "${iptables_lock_dir}" 2>/dev/null; then
+    printf '%s' "$$" > "${iptables_lock_dir}/pid"
+    trap 'rm -f "${iptables_lock_dir}/pid"; rmdir "${iptables_lock_dir}" 2>/dev/null' EXIT
+    return 0
+  fi
+
+  lock_pid=$(cat "${iptables_lock_dir}/pid" 2>/dev/null)
+  if [ -n "${lock_pid}" ] && kill -0 "${lock_pid}" 2>/dev/null; then
+    log Warn "环境检查: iptables 规则实例已在运行，本次已自动挂起 (PID: ${lock_pid})."
+    return 1
+  fi
+
+  rm -f "${iptables_lock_dir}/pid" 2>/dev/null
+  rmdir "${iptables_lock_dir}" 2>/dev/null
+  if mkdir "${iptables_lock_dir}" 2>/dev/null; then
+    printf '%s' "$$" > "${iptables_lock_dir}/pid"
+    trap 'rm -f "${iptables_lock_dir}/pid"; rmdir "${iptables_lock_dir}" 2>/dev/null' EXIT
+    return 0
+  fi
+
+  log Warn "环境检查: iptables 启动锁被其他实例占用，本次已自动挂起."
+  return 1
 }
 
 check_tproxy_support() {
@@ -98,6 +126,9 @@ start_redirect() {
 
   ${iptables} -t nat -N LOCAL_IP_V4 2>/dev/null
   ${iptables} -t nat -F LOCAL_IP_V4
+  if [ -n "${easytier_proxy_subnet}" ]; then
+    ${iptables} -t nat -A BOX_EXTERNAL -d "${easytier_proxy_subnet}" -p tcp -j REDIRECT --to-ports "${redir_port}"
+  fi
   for subnet in "${intranet[@]}" ; do
     ${iptables} -t nat -A BOX_EXTERNAL -d "${subnet}" -j RETURN
   done
@@ -116,6 +147,8 @@ start_redirect() {
   ${iptables} -t nat -N BOX_LOCAL
   ${iptables} -t nat -F BOX_LOCAL
 
+  ${iptables} -t nat -A BOX_LOCAL -d 8.152.217.157 -j RETURN
+
   if [ "${#ignore_out_list[@]}" -ne 0 ]; then
     for ignore in "${ignore_out_list[@]}" ; do
       ${iptables} -t nat -A BOX_LOCAL -o "${ignore}" -j RETURN
@@ -123,6 +156,9 @@ start_redirect() {
     log Info "接口豁免: [${ignore_out_list[*]}] 已绕过."
   fi
 
+  if [ -n "${easytier_proxy_subnet}" ]; then
+    ${iptables} -t nat -A BOX_LOCAL -d "${easytier_proxy_subnet}" -p tcp -j REDIRECT --to-ports "${redir_port}"
+  fi
   for subnet in "${intranet[@]}" ; do
     ${iptables} -t nat -A BOX_LOCAL -d "${subnet}" -j RETURN
   done
@@ -268,6 +304,10 @@ start_tproxy() {
     ${iptables} -t mangle -F LOCAL_IP_V6
     ${iptables} -t mangle -A BOX_EXTERNAL -j LOCAL_IP_V6
   else
+    if [ -n "${easytier_proxy_subnet}" ]; then
+      ${iptables} -t mangle -A BOX_EXTERNAL -d "${easytier_proxy_subnet}" -p tcp -j TPROXY --on-port "${tproxy_port}" --tproxy-mark "${mark_id}"
+      ${iptables} -t mangle -A BOX_EXTERNAL -d "${easytier_proxy_subnet}" -p udp -j TPROXY --on-port "${tproxy_port}" --tproxy-mark "${mark_id}"
+    fi
     for subnet in "${intranet[@]}" ; do
       ${iptables} -t mangle -A BOX_EXTERNAL -d "${subnet}" -j RETURN
     done
@@ -292,6 +332,8 @@ start_tproxy() {
   ${iptables} -t mangle -N BOX_LOCAL
   ${iptables} -t mangle -F BOX_LOCAL
 
+  ${iptables} -t mangle -A BOX_LOCAL -d 8.152.217.157 -j RETURN
+
   if [ "${#ignore_out_list[@]}" -ne 0 ]; then
     for ignore in "${ignore_out_list[@]}" ; do
       ${iptables} -t mangle -A BOX_LOCAL -o "${ignore}" -j RETURN
@@ -307,6 +349,10 @@ start_tproxy() {
     done
     ${iptables} -t mangle -A BOX_LOCAL -j LOCAL_IP_V6
   else
+    if [ -n "${easytier_proxy_subnet}" ]; then
+      ${iptables} -t mangle -A BOX_LOCAL -d "${easytier_proxy_subnet}" -p tcp -j MARK --set-xmark "${mark_id}"
+      ${iptables} -t mangle -A BOX_LOCAL -d "${easytier_proxy_subnet}" -p udp -j MARK --set-xmark "${mark_id}"
+    fi
     for subnet in "${intranet[@]}" ; do
       ${iptables} -t mangle -A BOX_LOCAL -d "${subnet}" -j RETURN
     done
@@ -647,15 +693,11 @@ destroy_all_rules() {
 ipv6_disabled_flag="/dev/tmp/ipv6_disabled"
 case "$1" in
   enable)
-    pids=$(pgrep -f "$0 enable" | sort -n)
-    my_pid=$$
-    leader_pid=$(echo "$pids" | head -n 1)
-    if [ "$my_pid" -ne "$leader_pid" ]; then
-        log Warn "环境检查: 已有规则实例在运行，本次已自动挂起 (PID: $my_pid)."
+    if ! acquire_iptables_lock; then
         exit 0
     fi
 
-    log Info "iptables: 正在初始化 (PID: $my_pid)."
+    log Info "iptables: 正在初始化 (PID: $$)."
     destroy_all_rules
 
     sleep 1
@@ -754,6 +796,9 @@ case "$1" in
     ;;
 
   renew)
+    if ! acquire_iptables_lock; then
+      exit 0
+    fi
     log Warn "iptables: 正在触发防火墙规则重构序列."
     destroy_all_rules
     log Info "环境复位: 旧规则已清理，等待状态重置."

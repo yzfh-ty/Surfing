@@ -230,6 +230,14 @@ Android user group IDs:
 
 </details>
 
+## EasyTier
+
+- Surfing starts EasyTier alongside Mihomo and connects to it through the SOCKS5 service at `127.0.0.1:11080`
+- The EasyTier configuration file is located at `/data/adb/box_bll/easytier/config.toml`
+- The default configuration uses `my-network`, `my-secret`, and `tcp://8.152.217.157:11010`; change these fields when using another EasyTier network
+- TUN and IPv4/IPv6 STUN are disabled by default; restart the Surfing service after changing the EasyTier configuration
+- Select `EasyTier` from Total Mode or any routing policy group to send traffic through the EasyTier network
+
 ---
 
 <a href="./LICENSE">

@@ -219,6 +219,14 @@
 
 </details>
 
+## EasyTier
+
+- Surfing 会同时启动 EasyTier，并通过 `127.0.0.1:11080` 的 SOCKS5 服务接入 Mihomo
+- EasyTier 配置文件位于 `/data/adb/box_bll/easytier/config.toml`
+- 默认已配置 `my-network`、`my-secret` 和 `tcp://8.152.217.157:11010`；使用其他 EasyTier 网络时再修改这些字段
+- 默认关闭 TUN 和 IPv4/IPv6 STUN；修改 EasyTier 配置后，重启 Surfing 服务即可生效
+- Mihomo 的“总模式”和各分流策略中可直接选择 `EasyTier`
+
 ---
 
 <a href="./LICENSE">

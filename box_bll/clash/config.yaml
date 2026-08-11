@@ -50,14 +50,10 @@ A: &A
   filter: "^(?!.*(套餐|重置|剩余|到期|订阅|群|账户|流量|有效期|时间|官网|失联|余额)).*$"
   use:
   - "1.主要地址"
-  - "2.备用地址"
-  - "3.额外地址"
 All: &All
   type: url-test
   use:
   - "1.主要地址"
-  - "2.备用地址"
-  - "3.额外地址"
 proxy-providers:
   "1.主要地址":
     <<: *p
@@ -65,21 +61,7 @@ proxy-providers:
       additional-prefix: "Main："
       <<: *proxy_fp
     path: "./proxies/1.主要地址.yaml"
-    url: "此处引入您的Clash订阅链接地址"
-  "2.备用地址":
-    <<: *p
-    override:
-      additional-prefix: "Minor："
-      <<: *proxy_fp
-    path: "./proxies/2.备用地址.yaml"
-    url: "此处引入您的Clash订阅链接地址"
-  "3.额外地址":
-    <<: *p
-    override:
-      additional-prefix: "Additi："
-      <<: *proxy_fp
-    path: "./proxies/3.额外地址.yaml"
-    url: "此处引入您的Clash订阅链接地址"
+    url: "https://tz.yzfh.de/c/?token=7e3f4d653a6f2da56cd6b4a91bb2ec4f"
 # —————————
 # 节点记忆
 profile: # ← 此行位置请勿变动！此为模块更新时备份恢复订阅的【结束标记】 ↑
@@ -175,6 +157,7 @@ dns:
 # —————————
 proxies:
   - {name: 🌐 本机·本地直连, type: direct, udp: true}
+  - {name: EasyTier, type: socks5, server: 127.0.0.1, port: 11080, udp: false}
   - {name: ⛔️ 禁止·拒绝连接, type: reject}
   - {name: 🌐 DNS_Hijack, type: dns}
 proxy_groups: &proxy_groups
@@ -190,6 +173,7 @@ proxy_groups: &proxy_groups
       - ALL·日本地区
       - ALL·狮城地区
       - ALL·其它地区
+      - EasyTier
       - ⛔️ 禁止·拒绝连接
       - 🌐 本机·本地直连
     <<: *A
@@ -208,6 +192,7 @@ proxy-groups:
       - ALL·美国地区
       - ALL·狮城地区
       - ALL·其它地区
+      - EasyTier
       - 🌐 本机·本地直连
   - name: 订阅更新
     icon: "https://cdn.jsdelivr.net/gh/GitMetaio/Surfing@main/app/icon/Update.svg"
@@ -354,6 +339,11 @@ rule-providers:
   自定义规则: # 主要用于广告/业务误杀自定义放行
     <<: *Local
     path: ./etc/自定义规则.list
+  EasyTier_IP:
+    type: file
+    behavior: ipcidr
+    format: text
+    path: ./etc/EasyTier_IP.list
   WebRTC_端/域:
     <<: *Classical
     path: ./rules/WebRTC.list
@@ -483,6 +473,8 @@ rules:
   - DST-PORT,53,🌐 DNS_Hijack
   - DST-PORT,853,DNS连接
   - RULE-SET,自定义规则,特殊地址
+  # EasyTier DHCP 网段由服务启动时自动写入本地规则提供者
+  - RULE-SET,EasyTier_IP,EasyTier,no-resolve
   - RULE-SET,WebRTC_端/域,WebRTC
   - RULE-SET,GoogleFCM_域,GoogleFCM
   - RULE-SET,YouTube_域,YouTube

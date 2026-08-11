@@ -6,8 +6,8 @@ magisk -v | grep -q lite && module_dir="/data/adb/lite_modules/Surfing"
 
 scripts=$(realpath "$0")
 scripts_dir=$(dirname "${scripts}")
+. "${scripts_dir}/box.config"
 mkdir -p "${run_path}"
-source "${scripts_dir}/box.config"
 
 wait_until_login() {
   local test_file="/sdcard/Android/.SURFINGTEST"

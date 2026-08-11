@@ -1,0 +1,27 @@
+instance_name = "surfing"
+dhcp = true
+listeners = []
+mapped_listeners = []
+socks5_proxy = "socks5://0.0.0.0:11080"
+stun_servers = []
+stun_servers_v6 = []
+
+[network_identity]
+network_name = "my-network"
+network_secret = "my-secret"
+
+[[peer]]
+uri = "tcp://8.152.217.157:11010"
+
+[flags]
+default_protocol = "tcp"
+enable_encryption = true
+enable_ipv6 = true
+no_tun = true
+use_smoltcp = true
+private_mode = true
+bind_device = false
+disable_p2p = true
+disable_udp_hole_punching = true
+disable_tcp_hole_punching = true
+disable_sym_hole_punching = true

@@ -1,0 +1,190 @@
+#!/system/bin/sh
+
+export PATH="/data/adb/box_bll/bin:$PATH"
+
+EASYTIER_DIR="/data/adb/box_bll/easytier"
+EASYTIER_BIN="/data/adb/box_bll/bin/easytier-core"
+CONFIG_FILE="${EASYTIER_DIR}/config.toml"
+PID_FILE="${EASYTIER_DIR}/easytier.pid"
+LOG_FILE="${EASYTIER_DIR}/easytier.log"
+WATCH_PID_FILE="${EASYTIER_DIR}/easytier-watch.pid"
+SUBNET_FILE="${EASYTIER_DIR}/subnet"
+RULE_FILE="/data/adb/box_bll/clash/etc/EasyTier_IP.list"
+BOX_IPTABLES="/data/adb/box_bll/scripts/box.iptables"
+BUSYBOX="/data/adb/box_bll/bin/busybox"
+
+extract_subnet() {
+    [ -s "${LOG_FILE}" ] || return 1
+    assigned=$(sed -n 's/.*dhcp ip changed.*new=Some(\([^)]*\)).*/\1/p' "${LOG_FILE}" | tail -n 1)
+    case "${assigned}" in
+        *.*/*)
+            prefix=${assigned##*/}
+            network=$(${BUSYBOX} ipcalc -n "${assigned}" 2>/dev/null | sed -n 's/^NETWORK=//p')
+            [ -n "${network}" ] && printf '%s/%s\n' "${network}" "${prefix}" && return 0
+            ;;
+    esac
+    return 1
+}
+
+sync_subnet() {
+    new_subnet=$(extract_subnet)
+    [ -n "${new_subnet}" ] || return 1
+    old_subnet=$(sed -n '1p' "${SUBNET_FILE}" 2>/dev/null)
+    [ "${new_subnet}" = "${old_subnet}" ] && return 1
+
+    printf '%s\n' "${new_subnet}" > "${SUBNET_FILE}"
+    mkdir -p "$(dirname "${RULE_FILE}")"
+    printf '%s\n' "${new_subnet}" > "${RULE_FILE}"
+    echo "EasyTier DHCP 网段已同步: ${new_subnet}"
+    return 0
+}
+
+reload_for_subnet() {
+    clash_pid=$(pidof clash 2>/dev/null | awk '{print $1}')
+    [ -n "${clash_pid}" ] || return 0
+    if [ -x "${BOX_IPTABLES}" ]; then
+        "${BOX_IPTABLES}" renew >/dev/null 2>&1 &
+    fi
+    kill -HUP "${clash_pid}" 2>/dev/null
+}
+
+watch_subnet() {
+    while [ -n "$(get_pid 2>/dev/null)" ]; do
+        if sync_subnet; then
+            reload_for_subnet
+        fi
+        sleep 5
+    done
+}
+
+start_subnet_watch() {
+    if [ -f "${WATCH_PID_FILE}" ]; then
+        watch_pid=$(cat "${WATCH_PID_FILE}" 2>/dev/null)
+        kill -0 "${watch_pid}" 2>/dev/null && return 0
+    fi
+    # Run the long-lived watcher in its own session so Magisk/adb callers do
+    # not wait for the background shell when the service command exits.
+    if [ -x "/system/bin/setsid" ]; then
+        /system/bin/setsid /system/bin/sh "${0}" watch </dev/null >/dev/null 2>&1 &
+    else
+        "${BUSYBOX}" setsid /system/bin/sh "${0}" watch </dev/null >/dev/null 2>&1 &
+    fi
+    printf '%s' "$!" > "${WATCH_PID_FILE}"
+}
+
+get_pid() {
+    if [ -f "${PID_FILE}" ]; then
+        pid=$(cat "${PID_FILE}" 2>/dev/null)
+        if [ -n "${pid}" ] && [ -d "/proc/${pid}" ] && tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null | grep -Fq "${EASYTIER_BIN}"; then
+            printf '%s\n' "${pid}"
+            return 0
+        fi
+        rm -f "${PID_FILE}"
+    fi
+
+    pid=$(pgrep -f "${EASYTIER_BIN}" | head -n 1)
+    [ -z "${pid}" ] && return 1
+    printf '%s' "${pid}" > "${PID_FILE}"
+    printf '%s\n' "${pid}"
+}
+
+start_service() {
+    pid=$(get_pid)
+    if [ -n "${pid}" ]; then
+        sync_subnet >/dev/null 2>&1
+        start_subnet_watch
+        echo "EasyTier 服务已在运行 (PID: ${pid})."
+        return 0
+    fi
+
+    if [ ! -x "${EASYTIER_BIN}" ]; then
+        echo "EasyTier 二进制不存在或不可执行: ${EASYTIER_BIN}"
+        return 1
+    fi
+    if [ ! -f "${CONFIG_FILE}" ]; then
+        echo "EasyTier 配置文件不存在: ${CONFIG_FILE}"
+        return 1
+    fi
+
+    mkdir -p "${EASYTIER_DIR}"
+    chmod 0755 "${EASYTIER_BIN}"
+    rm -f "${SUBNET_FILE}"
+    mkdir -p "$(dirname "${RULE_FILE}")"
+    printf '0.0.0.0/32\n' > "${RULE_FILE}"
+    if [ -x "/data/adb/box_bll/bin/busybox" ]; then
+        TZ=Asia/Shanghai "/data/adb/box_bll/bin/busybox" setuidgid root:net_admin "${EASYTIER_BIN}" -c "${CONFIG_FILE}" > "${LOG_FILE}" 2>&1 &
+    else
+        TZ=Asia/Shanghai setuidgid root:net_admin "${EASYTIER_BIN}" -c "${CONFIG_FILE}" > "${LOG_FILE}" 2>&1 &
+    fi
+    pid=$!
+    printf '%s' "${pid}" > "${PID_FILE}"
+
+    sleep 2
+    if kill -0 "${pid}" 2>/dev/null; then
+        if sync_subnet; then
+            reload_for_subnet
+        fi
+        start_subnet_watch
+        echo "EasyTier SOCKS5 服务已启动 (PID: ${pid})."
+        return 0
+    fi
+
+    rm -f "${PID_FILE}"
+    echo "EasyTier 服务启动失败，请检查 ${LOG_FILE}."
+    return 1
+}
+
+stop_service() {
+    if [ -f "${WATCH_PID_FILE}" ]; then
+        watch_pid=$(cat "${WATCH_PID_FILE}" 2>/dev/null)
+        [ -n "${watch_pid}" ] && kill "${watch_pid}" 2>/dev/null
+        rm -f "${WATCH_PID_FILE}"
+    fi
+    pid=$(get_pid)
+    if [ -z "${pid}" ]; then
+        echo "EasyTier 服务已停止."
+        return 0
+    fi
+
+    kill "${pid}" 2>/dev/null
+    wait_count=0
+    while kill -0 "${pid}" 2>/dev/null && [ "${wait_count}" -lt 5 ]; do
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+    kill -9 "${pid}" 2>/dev/null
+    rm -f "${PID_FILE}"
+    rm -f "${SUBNET_FILE}"
+    mkdir -p "$(dirname "${RULE_FILE}")"
+    printf '0.0.0.0/32\n' > "${RULE_FILE}"
+    echo "EasyTier 服务已停止."
+}
+
+case "$1" in
+    watch)
+        watch_subnet
+        ;;
+    start)
+        start_service
+        ;;
+    stop)
+        stop_service
+        ;;
+    restart)
+        stop_service
+        start_service
+        ;;
+    status)
+        pid=$(get_pid)
+        if [ -n "${pid}" ]; then
+            echo "EasyTier 服务正在运行 (PID: ${pid})."
+        else
+            echo "EasyTier 服务未运行."
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac

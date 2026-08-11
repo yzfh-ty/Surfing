@@ -28,6 +28,7 @@ UPDATE_SURFING_TILE_DIR="$UPDATE_MODULES_DIR/SurfingTile"
 
 MODULE_PROP_PATH="$CURRENT_MODULES_DIR/Surfing/module.prop"
 MODULE_VERSION_CODE=0
+EASYTIER_WAS_RUNNING=false
 [ -f "$MODULE_PROP_PATH" ] && MODULE_VERSION_CODE=$(awk -F'=' '/versionCode/ {print $2}' "$MODULE_PROP_PATH")
 
 if [ "$MODULE_VERSION_CODE" -lt 1647 ]; then
@@ -41,13 +42,36 @@ init_busybox_toolchain() {
   cd "$BIN_PATH" && find . -type l -delete && ./busybox --install -s . && cd "$MODPATH"
 }
 
+runtime_arch() {
+  case "$(getprop ro.product.cpu.abi)" in
+    arm64-v8a) printf '%s' "arm64-v8a" ;;
+    x86_64) printf '%s' "x86_64" ;;
+    *) return 1 ;;
+  esac
+}
+
+select_runtime_binaries() {
+  source_root="$1"
+  arch=$(runtime_arch) || abort "Unsupported Android ABI: $(getprop ro.product.cpu.abi)"
+  arch_root="${source_root}/bin/arch/${arch}"
+
+  if [ ! -f "${arch_root}/clash" ] || [ ! -f "${arch_root}/easytier-core" ]; then
+    abort "Missing runtime binaries for Android ABI: ${arch}"
+  fi
+
+  cp -f "${arch_root}/clash" "$BIN_PATH/clash"
+  cp -f "${arch_root}/easytier-core" "$BIN_PATH/easytier-core"
+  ui_print "Selected runtime architecture: ${arch}"
+}
+
 extract_subscribe_urls() {
   if [ -f "$CONFIG_FILE" ]; then
     sed -n '/# 订阅地址相关/,/profile:.*↑/p' "$CONFIG_FILE" > "$BACKUP_FILE"
     
-    if [ -s "$BACKUP_FILE" ]; then
+    if [ -s "$BACKUP_FILE" ] && grep -q '^proxy-providers:' "$BACKUP_FILE" && grep -q '^[[:space:]]*url:' "$BACKUP_FILE"; then
       ui_print "Backed up subscription configuration."
     else
+      rm -f "$BACKUP_FILE"
       ui_print "No subscription block found. Using default."
     fi
   else
@@ -56,7 +80,7 @@ extract_subscribe_urls() {
 }
 
 restore_subscribe_urls() {
-  if [ -f "$BACKUP_FILE" ] && [ -s "$BACKUP_FILE" ]; then
+  if [ -f "$BACKUP_FILE" ] && [ -s "$BACKUP_FILE" ] && grep -q '^proxy-providers:' "$BACKUP_FILE" && grep -q '^[[:space:]]*url:' "$BACKUP_FILE"; then
     awk -v backup="$BACKUP_FILE" '
       BEGIN { skip = 0 }
       /# 订阅地址相关/ {
@@ -73,6 +97,7 @@ restore_subscribe_urls() {
     ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
     ui_print "Restored subscription configuration."
   else
+    rm -f "$BACKUP_FILE"
     ui_print "No valid backup found. Skipped restore."
   fi
 }
@@ -179,7 +204,20 @@ if [ -d "$BOX_BLL_PATH" ]; then
   ui_print "Updating..."
   ui_print "↴"
 
+  mkdir -p "$BIN_PATH" "$SCRIPTS_PATH" "$BOX_BLL_PATH/easytier" "$BOX_BLL_PATH/clash/proxies" "$BOX_BLL_PATH/clash/etc" "$BOX_BLL_PATH/clash/rules"
+  if pgrep -f "$BIN_PATH/easytier-core" >/dev/null; then
+    EASYTIER_WAS_RUNNING=true
+    pkill -f "$BIN_PATH/easytier-core" 2>/dev/null
+  fi
   cp -f "$MODPATH/box_bll/bin/busybox" "$BIN_PATH/busybox" && init_busybox_toolchain
+  cp -f "$MODPATH/box_bll/bin/clash" "$BIN_PATH/clash"
+  cp -f "$MODPATH/box_bll/bin/easytier-core" "$BIN_PATH/easytier-core"
+  select_runtime_binaries "$MODPATH/box_bll"
+
+  if [ ! -f "$BOX_BLL_PATH/easytier/config.toml" ]; then
+    mkdir -p "$BOX_BLL_PATH/easytier"
+    cp -f "$MODPATH/box_bll/easytier/config.toml" "$BOX_BLL_PATH/easytier/config.toml"
+  fi
 
   [ "$INSTALL_TILE" = "true" ] && install_surfingtile_module && install_surfingtile_apk
   extract_subscribe_urls
@@ -187,10 +225,10 @@ if [ -d "$BOX_BLL_PATH" ]; then
   [ -f "$HOSTS_FILE" ] && cp -f "$HOSTS_FILE" "$HOSTS_BACKUP"
   mkdir -p "$HOSTS_PATH" && touch "$HOSTS_FILE"
 
-  cp "$BOX_BLL_PATH/clash/config.yaml" "$BOX_BLL_PATH/clash/config.yaml.bak"
-  cp "$BOX_BLL_PATH/scripts/box.config" "$BOX_BLL_PATH/scripts/box.config.bak"
+  [ -f "$BOX_BLL_PATH/clash/config.yaml" ] && cp "$BOX_BLL_PATH/clash/config.yaml" "$BOX_BLL_PATH/clash/config.yaml.bak"
+  [ -f "$BOX_BLL_PATH/scripts/box.config" ] && cp "$BOX_BLL_PATH/scripts/box.config" "$BOX_BLL_PATH/scripts/box.config.bak"
   cp -f "$MODPATH/box_bll/clash/config.yaml" "$BOX_BLL_PATH/clash/"
-  cp -f "$MODPATH/box_bll/clash/Toolbox.sh" "$BOX_BLL_PATH/clash/"
+  [ -f "$MODPATH/box_bll/clash/Toolbox.sh" ] && cp -f "$MODPATH/box_bll/clash/Toolbox.sh" "$BOX_BLL_PATH/clash/"
   cp -f "$MODPATH/box_bll/scripts/"* "$BOX_BLL_PATH/scripts/"
 
   OLD_CONFIG="$BOX_BLL_PATH/scripts/box.config.bak"
@@ -237,6 +275,7 @@ else
   mv "$MODPATH/box_bll" /data/adb/
 
   init_busybox_toolchain
+  select_runtime_binaries "$BOX_BLL_PATH"
 
   install_surfingtile_module
   install_surfingtile_apk
@@ -257,5 +296,9 @@ set_perm_recursive "$BOX_BLL_PATH/clash/etc" 0 0 0755 0644
 
 set_perm "$service_dir/Surfing_service.sh" 0 0 0700
 chmod ugo+x "$BOX_BLL_PATH/scripts/"*
+
+if [ "$EASYTIER_WAS_RUNNING" = true ]; then
+  "$SCRIPTS_PATH/easytier.service" start >/dev/null 2>&1
+fi
 
 rm -f customize.sh
